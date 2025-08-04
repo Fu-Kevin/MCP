@@ -1,4 +1,4 @@
-# mcp/tools/real_check_calendar.py - FIXED FOR RAILWAY
+# mcp/tools/real_check_calendar.py - FIXED WITH SMART MATCHING
 
 import os
 import json
@@ -54,7 +54,7 @@ class GoogleCalendarClient:
                             token.write(creds.to_json())
             
             else:
-                print("❌ No credentials found - will use mock data")
+                print("❌ No credentials found - will use smart mock data")
                 raise Exception("No Google Calendar credentials configured")
             
             self.service = build('calendar', 'v3', credentials=creds)
@@ -62,7 +62,7 @@ class GoogleCalendarClient:
             
         except Exception as e:
             print(f"❌ Calendar authentication failed: {e}")
-            print("🔄 Will use mock calendar data")
+            print("🔄 Will use smart mock calendar data")
             self.service = None
     
     def get_busy_times(self, 
@@ -99,10 +99,9 @@ class GoogleCalendarClient:
                                days_ahead: int = 14) -> List[str]:
         """Generate available time slots"""
         
-        # If no calendar service, generate reasonable mock slots for current dates
+        # If no calendar service, generate smart mock slots
         if not self.service:
-            print("⚠️ No calendar service - generating mock available slots for current dates")
-            return self._generate_mock_available_slots(duration_minutes, business_start, business_end, days_ahead)
+            return self._generate_smart_mock_slots(duration_minutes, business_start, business_end, days_ahead)
         
         busy_times = self.get_busy_times(days_ahead=days_ahead)
         
@@ -132,11 +131,9 @@ class GoogleCalendarClient:
             # Skip outside business hours
             if current.hour < business_start or current.hour >= business_end:
                 if current.hour >= business_end:
-                    # Move to next day
                     current += timedelta(days=1)
                     current = current.replace(hour=business_start)
                 else:
-                    # Move to business start
                     current = current.replace(hour=business_start)
                 continue
             
@@ -159,8 +156,8 @@ class GoogleCalendarClient:
         print(f"✅ Generated {len(available_slots)} available slots")
         return available_slots
     
-    def _generate_mock_available_slots(self, duration_minutes, business_start, business_end, days_ahead):
-        """Generate mock available slots with current dates"""
+    def _generate_smart_mock_slots(self, duration_minutes, business_start, business_end, days_ahead):
+        """Generate smart mock slots that include reasonable business hours"""
         available_slots = []
         current = datetime.now().replace(minute=0, second=0, microsecond=0)
         
@@ -170,7 +167,7 @@ class GoogleCalendarClient:
         
         end_time = current + timedelta(days=days_ahead)
         
-        while current < end_time and len(available_slots) < 15:
+        while current < end_time and len(available_slots) < 20:
             # Skip weekends
             if current.weekday() >= 5:
                 current += timedelta(days=1)
@@ -186,13 +183,13 @@ class GoogleCalendarClient:
                     current = current.replace(hour=business_start)
                 continue
             
-            # Add every 2nd hour as available (simulate some busy periods)
-            if current.hour % 2 == 0 or current.hour in [10, 14, 16]:
+            # Generate reasonable business hours (9am-5pm, every hour)
+            if current.hour in [9, 10, 11, 12, 13, 14, 15, 16]:  # Common meeting times
                 available_slots.append(current.isoformat() + 'Z')
             
             current += timedelta(hours=1)
         
-        print(f"🧪 Generated {len(available_slots)} mock available slots with current dates")
+        print(f"🧪 Generated {len(available_slots)} smart mock available slots")
         return available_slots
     
     def create_event(self,
@@ -255,18 +252,18 @@ def get_calendar_client():
 
 def check_real_calendar(candidate_times: List[str]) -> AvailableSlots:
     """
-    Check real Google Calendar for availability
+    FIXED: Check real Google Calendar for availability with SMART MATCHING
     
     Args:
         candidate_times: List of ISO format times from candidate
         
     Returns:
-        AvailableSlots with real calendar data
+        AvailableSlots with intelligently matched calendar data
     """
     try:
         calendar_client = get_calendar_client()
         
-        # Get real available slots (or mock if no credentials)
+        # Get available slots (real or smart mock)
         interviewer_times = calendar_client.generate_available_slots(
             duration_minutes=60,
             business_start=9,
@@ -274,32 +271,76 @@ def check_real_calendar(candidate_times: List[str]) -> AvailableSlots:
             days_ahead=14
         )
         
-        # Find matches between candidate and interviewer times
-        proposed_times = []
+        print(f"📅 Candidate requested {len(candidate_times)} times:")
+        for time_str in candidate_times:
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+            print(f"   - {dt.strftime('%A, %B %d at %I:%M %p UTC')} ({time_str})")
+        
+        print(f"📅 Available interviewer times ({len(interviewer_times)}):")
+        for i, time_str in enumerate(interviewer_times[:5]):  # Show first 5
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+            print(f"   {i+1}. {dt.strftime('%A, %B %d at %I:%M %p UTC')} ({time_str})")
+        
+        # IMPROVED SMART MATCHING LOGIC
+        exact_matches = []
+        same_day_matches = []
+        close_matches = []
         
         for candidate_time in candidate_times:
             try:
                 candidate_dt = datetime.fromisoformat(candidate_time.replace('Z', '+00:00'))
                 
-                # Look for exact hour matches or close matches
+                # Look for matches in interviewer availability
                 for interviewer_time in interviewer_times:
                     interviewer_dt = datetime.fromisoformat(interviewer_time.replace('Z', '+00:00'))
                     
-                    # Check if times are within 2 hours
-                    time_diff = abs((candidate_dt - interviewer_dt).total_seconds())
-                    if time_diff <= 7200:  # Within 2 hours
-                        proposed_times.append(interviewer_time)
-                        break
-                        
+                    # Calculate time difference in hours
+                    time_diff_hours = abs((candidate_dt - interviewer_dt).total_seconds()) / 3600
+                    
+                    # Check if same day
+                    same_day = candidate_dt.date() == interviewer_dt.date()
+                    
+                    if same_day and time_diff_hours <= 1:  # Same day, within 1 hour
+                        exact_matches.append((interviewer_time, time_diff_hours))
+                        print(f"✅ EXACT MATCH: {candidate_dt.strftime('%A %I:%M %p')} → {interviewer_dt.strftime('%A %I:%M %p')} (diff: {time_diff_hours:.1f}h)")
+                    elif same_day and time_diff_hours <= 3:  # Same day, within 3 hours
+                        same_day_matches.append((interviewer_time, time_diff_hours))
+                        print(f"🟡 SAME DAY: {candidate_dt.strftime('%A %I:%M %p')} → {interviewer_dt.strftime('%A %I:%M %p')} (diff: {time_diff_hours:.1f}h)")
+                    elif time_diff_hours <= 24:  # Within 24 hours (adjacent days)
+                        close_matches.append((interviewer_time, time_diff_hours))
+                        print(f"🟠 CLOSE: {candidate_dt.strftime('%A %I:%M %p')} → {interviewer_dt.strftime('%A %I:%M %p')} (diff: {time_diff_hours:.1f}h)")
+                
             except Exception as e:
                 print(f"Error processing candidate time {candidate_time}: {e}")
                 continue
         
-        # If no matches, suggest first few available slots
-        if not proposed_times:
-            proposed_times = interviewer_times[:3]
+        # Priority selection: exact matches first, then same day, then close matches
+        proposed_times = []
         
-        print(f"🎯 Found {len(proposed_times)} proposed meeting times")
+        if exact_matches:
+            # Sort by smallest time difference
+            exact_matches.sort(key=lambda x: x[1])
+            proposed_times = [match[0] for match in exact_matches[:3]]
+            print(f"🎯 Using {len(proposed_times)} EXACT matches")
+        elif same_day_matches:
+            # Sort by smallest time difference
+            same_day_matches.sort(key=lambda x: x[1])
+            proposed_times = [match[0] for match in same_day_matches[:3]]
+            print(f"🎯 Using {len(proposed_times)} SAME DAY matches")
+        elif close_matches:
+            # Sort by smallest time difference
+            close_matches.sort(key=lambda x: x[1])
+            proposed_times = [match[0] for match in close_matches[:3]]
+            print(f"🎯 Using {len(proposed_times)} CLOSE matches")
+        else:
+            # No good matches found, suggest first few available slots
+            proposed_times = interviewer_times[:3]
+            print(f"🎯 No matches found, using {len(proposed_times)} general availability slots")
+        
+        print(f"📝 Final proposed times:")
+        for i, time_str in enumerate(proposed_times):
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+            print(f"   {i+1}. {dt.strftime('%A, %B %d at %I:%M %p UTC')} ({time_str})")
         
         return AvailableSlots(
             type="available_slots",
@@ -310,9 +351,9 @@ def check_real_calendar(candidate_times: List[str]) -> AvailableSlots:
         
     except Exception as e:
         print(f"❌ Error with calendar processing: {e}")
-        print("🔄 Using basic mock calendar with current dates...")
+        print("🔄 Using basic fallback...")
         
-        # Generate simple mock data with current dates
+        # Simple fallback with current dates
         now = datetime.now()
         mock_times = []
         for i in range(5):
@@ -371,25 +412,3 @@ def create_meeting_event(
             "error": str(e),
             "message": "Failed to create calendar event"
         }
-
-# Setup instructions for Railway deployment
-"""
-RAILWAY SETUP INSTRUCTIONS:
-
-Method 1 - Service Account (Recommended for production):
-1. Go to Google Cloud Console > APIs & Services > Credentials
-2. Create a Service Account
-3. Download the JSON key file
-4. In Railway, add environment variable:
-   GOOGLE_SERVICE_ACCOUNT_JSON = {paste the entire JSON content}
-5. Share your Google Calendar with the service account email
-
-Method 2 - OAuth Token (For testing):
-1. Run this locally first to generate token.json
-2. Upload token.json to your Railway deployment
-3. This will work temporarily but may need refresh
-
-Method 3 - Mock Mode (Current):
-- Will generate reasonable fake availability with current dates
-- Good for testing the full pipeline without calendar setup
-"""
