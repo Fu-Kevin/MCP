@@ -132,6 +132,20 @@ async def http_create_event(request: CreateEventRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# FIXED: Add the missing endpoint that Gmail expects
+@app.post("/create_meeting_event")
+async def http_create_meeting_event(request: CreateEventRequest):
+    """Create calendar event (alias for create_event - used by Gmail automation)"""
+    try:
+        result = create_meeting_event(
+            candidate_email=request.candidate_email,
+            meeting_time=request.meeting_time,
+            candidate_name=request.candidate_name
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 # Complete scheduling workflow endpoint
 @app.post("/schedule_workflow")
 async def schedule_workflow(request: ScheduleWorkflowRequest):
@@ -201,6 +215,7 @@ async def list_endpoints():
             {"path": "/generate_reply", "method": "POST", "description": "Generate email reply"},
             {"path": "/convert_timezone", "method": "POST", "description": "Convert timezone"},
             {"path": "/create_event", "method": "POST", "description": "Create calendar event"},
+            {"path": "/create_meeting_event", "method": "POST", "description": "Create calendar event (Gmail alias)"},
             {"path": "/schedule_workflow", "method": "POST", "description": "Complete scheduling workflow"},
             {"path": "/health", "method": "GET", "description": "Health check"},
             {"path": "/endpoints", "method": "GET", "description": "List endpoints"}
